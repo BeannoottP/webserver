@@ -133,48 +133,8 @@ void* run_http_thread(void *vargp)
     return NULL;
 }
 
-void generate
+
 
 void generate_headers(struct httpRequest *request)
 {
-}
-
-{
-    char buf[BUFSIZE];            /* message buffer */
-    int num_read;                 /* num bytes read */
-    int num_sent;                 /* num bytes sent */
-    int connfd = *((int *)vargp); /* nasty pointer casting. this is our client fd */
-
-    /* detach this thread from parent thread */
-    if (pthread_detach(pthread_self()) != 0)
-    {
-        printf("error detaching\n");
-        exit(1);
-    }
-
-    /* free heap space for vargp since we have connfd */
-    free(vargp);
-
-    /* recv: read input string from the client */
-    bzero(buf, BUFSIZE);
-    num_read = recv(connfd, buf, BUFSIZE, 0);
-    if (num_read < 0)
-    {
-        printf("ERROR reading from socket\n");
-        exit(1);
-    }
-    printf("server received %d bytes: %s\n", num_read, buf);
-
-    /* send: echo the input string back to the client */
-    num_sent = send(connfd, buf, num_read, 0);
-    if (num_sent < 0)
-    {
-        printf("ERROR writing to socket\n");
-        exit(1);
-    }
-
-    /* close client */
-    shutdown(connfd, 0);
-    close(connfd);
-    return NULL;
 }
