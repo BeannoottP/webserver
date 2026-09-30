@@ -14,6 +14,7 @@ A collection of functions to handle requests
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <pthread.h>
+#include <time.h>
 
 #define BUFSIZE 1024
 #define MAXMESSAGES 16
@@ -21,10 +22,10 @@ A collection of functions to handle requests
 // void generate_headers() {}
 // void
 struct httpRequest {
-    int requestVersion;
-    char* message;
-    char* fileName;
-    int returnCode;
+    int requestVersion; // 0 if 1.0, 1 if 1.1
+    char* message; // first line of message
+    char* fileName; // middle name of file
+    int returnCode; 
     char* headers;
     char* messageBody;
     char* contentType;
@@ -126,15 +127,60 @@ void* run_http_thread(void *vargp)
 
     //create empty http request
     struct httpRequest *request = malloc(sizeof(struct httpRequest));
-    
+    request->returnCode = 200;
+    request->contentType = "text/html";
+    request->messageBody = "<h1>oh my god</h1>";
+    request->contentLength = strlen(request->messageBody);
+
+    generate_headers(request);
+    send(connfd, request->headers, strlen(request->headers), 0);
+    send(connfd, request->messageBody, request->contentLength, 0);
 
     shutdown(connfd, 0);
     close(connfd);
     return NULL;
 }
 
+const char* get_status_text(int code)
+{
+    switch (code)
+    {
+        case 200: return "OK";
+        case 400: return "Bad Request";
+        case 403: return "Forbidden";
+        case 404: return "Not Found";
+        default:  return "Unknown";
+    }
+}
 
+void get_date_string(char *buffer, int size)
+{
+    time_t now = time(NULL);
+    struct tm *tm_info = gmtime(&now);
+    strftime(buffer, size, "%a, %d %b %Y %H:%M:%S GMT", tm_info);
+}
 
 void generate_headers(struct httpRequest *request)
 {
+    char date[128];
+    char header_buffer[BUFSIZE];
+
+    get_date_string(date, sizeof(date));
+    
+    const char *status_text = get_status_text(request->returnCode);
+
+    request->headers = malloc(BUFSIZE);
+    
+    snprintf(request->headers, BUFSIZE,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %d\r\n"
+        "Date: %s\r\n"
+        "\r\n",
+        request->returnCode,
+        status_text,
+        request->contentType,
+        request->contentLength,
+        date
+    );
 }
