@@ -25,6 +25,7 @@ A collection of functions to handle requests
 struct httpRequest
 {
     int requestVersion; // 0 if 1.0, 1 if 1.1
+    int keepAlive;
     char *message;      // first line of message
     char *fileName;     // middle name of file
     int returnCode;
@@ -48,13 +49,9 @@ void *run_http_thread(void *vargp)
 {
     char message[BUFSIZE];
     int num_read;                 /* num bytes read */
-    int num_sent;                 /* num bytes sent */
     struct thread_args *args = vargp;
     int connfd = args->connfd;
     const char *document_root = args->document_root;
-
-    char *messageLines[MAXMESSAGES];
-    int numMessages = 0;
 
     /* detach this thread from parent thread */
     if (pthread_detach(pthread_self()) != 0)
@@ -65,17 +62,26 @@ void *run_http_thread(void *vargp)
 
     free(args);
 
-    /* recv: read input string from the client */
-    int twoNewLine = 1;
-    while (twoNewLine)
+    int keep_alive = 1; // keep alive for HTTP/1.1
+
+    // keep reading requests until the client asks to close
+    while (keep_alive)
     {
+        char *messageLines[MAXMESSAGES];
+        int numMessages = 0;
+        int twoNewLine = 1;
+
+        /* recv: read input string from the client */
+        while (twoNewLine)
+        {
         // read message
         bzero(message, BUFSIZE);
         num_read = recv(connfd, message, BUFSIZE, 0);
-        if (num_read < 0)
+        if (num_read <= 0)
         {
-            // TODO close with error
-            exit(1);
+            // the client closed the connection or an error occurred
+            keep_alive = 0;
+            break;
         }
 
         // check for empty line (telnet connection), ends early to not save empty new line
@@ -130,7 +136,12 @@ void *run_http_thread(void *vargp)
             // TODO close with error
         }
         printf("server received %d bytes: %s\n", num_read, messageLines[numMessages - 1]);
-    }
+        }
+
+        if (!keep_alive)
+        {
+            break;
+        }
 
     printf("all lines \n");
     for (int i = 0; i < numMessages; i++)
@@ -138,19 +149,42 @@ void *run_http_thread(void *vargp)
         printf("%s %i \n", messageLines[i], i);
     }
 
-    // create empty http request
-    struct httpRequest *request = calloc(1, sizeof(struct httpRequest));
-    parseHttpRequest(request, messageLines, numMessages);
+        // create empty http request
+        struct httpRequest *request = calloc(1, sizeof(struct httpRequest));
+        parseHttpRequest(request, messageLines, numMessages);
 
-    //if valid request at this point, look for file
-    if (request->returnCode == 200) {findFile(request, document_root);}
+        //if valid request at this point, look for file
+        if (request->returnCode == 200) {findFile(request, document_root);}
 
+        // HTTP/1.1 stays open by default; HTTP/1.0 closes by default
+        request->keepAlive = request->requestVersion == 1;
+        for (int i = 1; i < numMessages; i++)
+        {
+            // a client can ask to close an HTTP/1.1 connection
+            if (strncasecmp(messageLines[i], "Connection:", 11) == 0 &&
+                strstr(messageLines[i], "close") != NULL)
+            {
+                request->keepAlive = 0;
+            }
+        }
 
-    //generate headers and send back
-    generate_headers(request);
-    send(connfd, request->headers, strlen(request->headers), 0);
-    send(connfd, request->messageBody, request->contentLength, 0);
+        //generate headers and send back
+        generate_headers(request);
+        send(connfd, request->headers, strlen(request->headers), 0);
+        send(connfd, request->messageBody, request->contentLength, 0);
 
+        // use this request's choice for the next loop
+        keep_alive = request->keepAlive;
+
+        // free the data for this request before reading the next one
+        for (int i = 0; i < numMessages; i++)
+        {
+            free(messageLines[i]);
+        }
+        free(request->headers);
+        free(request->messageBody);
+        free(request);
+    }
 
     //close connection and thread
     shutdown(connfd, 0);
@@ -488,8 +522,6 @@ void get_date_string(char *buffer, int size)
 void generate_headers(struct httpRequest *request)
 {
     char date[128];
-    char header_buffer[BUFSIZE];
-
     get_date_string(date, sizeof(date));
 
     const char *status_text = get_status_text(request->returnCode);
@@ -536,10 +568,12 @@ void generate_headers(struct httpRequest *request)
              "Content-Type: %s\r\n"
              "Content-Length: %d\r\n"
              "Date: %s\r\n"
+             "Connection: %s\r\n"
              "\r\n",
              request->returnCode,
              status_text,
              request->contentType,
              request->contentLength,
-             date);
+             date,
+             request->keepAlive ? "keep-alive" : "close");
 }
