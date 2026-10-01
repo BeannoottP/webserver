@@ -222,6 +222,7 @@ void *run_http_thread(void *vargp)
         {
             free(messageLines[i]);
         }
+        free(request->fileName);
         free(request->headers);
         free(request->messageBody);
         free(request);
@@ -239,6 +240,7 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
     // have you given me anything
     if (numMessages < 1)
     {
+        printf("No messages, closing connection connfd=%d\n", connfd);
         request->returnCode = 400;
         return;
     }
@@ -265,7 +267,7 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
             return;
         }
     }
-    free(dupForTokens);
+
 
     // too few arguments
     if (arrSize != 3)
@@ -278,6 +280,7 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
     // not GET request
     if (!(strcmp(seperated[0], "GET") == 0))
     {
+        printf("Not a GET request, closing connection connfd=%d\n", connfd);
         request->returnCode = 400;
         return;
     }
@@ -320,9 +323,10 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
     }
 
     // assume file is correct for now
-    request->fileName = seperated[1];
+    request->fileName = strdup(seperated[1]);
     // prelim set so i can print shit out, not gaurenteeded to be correct
     request->returnCode = 200;
+    free(dupForTokens);
 }
 
 void findFile(struct httpRequest *request, const char *document_root)
