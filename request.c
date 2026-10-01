@@ -153,7 +153,7 @@ void *run_http_thread(void *vargp)
         struct httpRequest *request = calloc(1, sizeof(struct httpRequest));
         parseHttpRequest(request, messageLines, numMessages);
 
-        //if valid request at this point, look for file
+        // if valid request at this point, look for file
         if (request->returnCode == 200) {findFile(request, document_root);}
 
         // HTTP/1.1 stays open by default; HTTP/1.0 closes by default
@@ -168,7 +168,7 @@ void *run_http_thread(void *vargp)
             }
         }
 
-        //generate headers and send back
+        // generate headers and send back
         generate_headers(request);
         send(connfd, request->headers, strlen(request->headers), 0);
         send(connfd, request->messageBody, request->contentLength, 0);
