@@ -101,13 +101,31 @@ void *run_http_thread(void *vargp)
             {
                 if (numMessages >= MAXMESSAGES)
                 {
-                    exit(1);
+                    const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+                    send(connfd, err_msg, strlen(err_msg), 0);
+
+                    for (int i = 0; i < numMessages; i++)
+                    {
+                        free(messageLines[i]);
+                    }
+
+                    keep_alive = 0;
+                    break;
                 }
 
                 messageLines[numMessages] = strdup(line);
                 if (messageLines[numMessages] == NULL)
                 {
-                    // TODO close with error
+                    const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+                    send(connfd, err_msg, strlen(err_msg), 0);
+
+                    for (int i = 0; i < numMessages; i++)
+                    {
+                        free(messageLines[i]);
+                    }
+
+                    keep_alive = 0;
+                    break;
                 }
 
                 numMessages++;
@@ -133,7 +151,16 @@ void *run_http_thread(void *vargp)
         numMessages += 1;
         if (numMessages >= MAXMESSAGES)
         {
-            // TODO close with error
+            const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+            send(connfd, err_msg, strlen(err_msg), 0);
+
+            for (int i = 0; i < numMessages; i++)
+            {
+                free(messageLines[i]);
+            }
+
+            keep_alive = 0;
+            break;
         }
         printf("server received %d bytes: %s\n", num_read, messageLines[numMessages - 1]);
         }
