@@ -26,8 +26,8 @@ struct httpRequest
 {
     int requestVersion; // 0 if 1.0, 1 if 1.1
     int keepAlive;
-    char *message;      // first line of message
-    char *fileName;     // middle name of file
+    char *message;  // first line of message
+    char *fileName; // middle name of file
     int returnCode;
     char *headers;
     char *messageBody;
@@ -41,14 +41,14 @@ struct thread_args
     const char *document_root;
 };
 
-void parseHttpRequest(struct httpRequest *request, char *messageLines[], int numMessages);
+void parseHttpRequest(struct httpRequest *request, char *messageLines[], int numMessages, int connfd);
 void findFile(struct httpRequest *request, const char *document_root);
 void generate_headers(struct httpRequest *request);
 
 void *run_http_thread(void *vargp)
 {
     char message[BUFSIZE];
-    int num_read;                 /* num bytes read */
+    int num_read; /* num bytes read */
     struct thread_args *args = vargp;
     int connfd = args->connfd;
     const char *document_root = args->document_root;
@@ -56,7 +56,7 @@ void *run_http_thread(void *vargp)
     /* detach this thread from parent thread */
     if (pthread_detach(pthread_self()) != 0)
     {
-        printf("error detaching\n");
+        printf("error detaching connfd=%d\n", connfd);
         exit(1);
     }
 
@@ -74,95 +74,98 @@ void *run_http_thread(void *vargp)
         /* recv: read input string from the client */
         while (twoNewLine)
         {
-        // read message
-        bzero(message, BUFSIZE);
-        num_read = recv(connfd, message, BUFSIZE, 0);
-        if (num_read <= 0)
-        {
-            // the client closed the connection or an error occurred
-            keep_alive = 0;
-            break;
-        }
-
-        // check for empty line (telnet connection), ends early to not save empty new line
-        if (strcmp(message, "\n") == 0 || strcmp(message, "\r\n") == 0)
-        {
-            twoNewLine = 0;
-            continue;
-        }
-
-        // check for end of message browser connection, splits message to lines and saves to messageLines
-        int len = num_read;
-        if (len >= 4 && message[len - 4] == '\r' && message[len - 3] == '\n' && message[len - 2] == '\r' && message[len - 1] == '\n')
-        {
-            char *line = strtok(message, "\r\n");
-
-            while (line != NULL)
+            // read message
+            bzero(message, BUFSIZE);
+            num_read = recv(connfd, message, BUFSIZE, 0);
+            if (num_read <= 0)
             {
-                if (numMessages >= MAXMESSAGES)
-                {
-                    const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
-                    send(connfd, err_msg, strlen(err_msg), 0);
-
-                    for (int i = 0; i < numMessages; i++)
-                    {
-                        free(messageLines[i]);
-                    }
-
-                    keep_alive = 0;
-                    break;
-                }
-
-                messageLines[numMessages] = strdup(line);
-                if (messageLines[numMessages] == NULL)
-                {
-                    const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
-                    send(connfd, err_msg, strlen(err_msg), 0);
-
-                    for (int i = 0; i < numMessages; i++)
-                    {
-                        free(messageLines[i]);
-                    }
-
-                    keep_alive = 0;
-                    break;
-                }
-
-                numMessages++;
-
-                line = strtok(NULL, "\r\n");
+                // the client closed the connection or an error occurred
+                keep_alive = 0;
+                break;
             }
 
-            twoNewLine = 0;
-            continue;
-        }
-
-        // clean newline for telnet messages
-        if (len >= 2 && message[len - 2] == '\r' && message[len - 1] == '\n')
-        {
-            message[len - 2] = '\0';
-        }
-        else if (len >= 1 && message[len - 1] == '\n')
-        {
-            message[len - 1] = '\0';
-        }
-
-        messageLines[numMessages] = strdup(message);
-        numMessages += 1;
-        if (numMessages >= MAXMESSAGES)
-        {
-            const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
-            send(connfd, err_msg, strlen(err_msg), 0);
-
-            for (int i = 0; i < numMessages; i++)
+            // check for empty line (telnet connection), ends early to not save empty new line
+            if (strcmp(message, "\n") == 0 || strcmp(message, "\r\n") == 0)
             {
-                free(messageLines[i]);
+                twoNewLine = 0;
+                continue;
             }
 
-            keep_alive = 0;
-            break;
-        }
-        printf("server received %d bytes: %s\n", num_read, messageLines[numMessages - 1]);
+            // check for end of message browser connection, splits message to lines and saves to messageLines
+            int len = num_read;
+            if (len >= 4 && message[len - 4] == '\r' && message[len - 3] == '\n' && message[len - 2] == '\r' && message[len - 1] == '\n')
+            {
+                char *line = strtok(message, "\r\n");
+
+                while (line != NULL)
+                {
+                    if (numMessages >= MAXMESSAGES)
+                    {
+                        //TODO Needs to send a valid http response as well
+                        printf("Too many messages, closing connection connfd=%d\n", connfd);
+                        const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+                        send(connfd, err_msg, strlen(err_msg), 0);
+
+                        for (int i = 0; i < numMessages; i++)
+                        {
+                            free(messageLines[i]);
+                        }
+
+                        keep_alive = 0;
+                        break;
+                    }
+
+                    messageLines[numMessages] = strdup(line);
+                    if (messageLines[numMessages] == NULL)
+                    {
+                        printf("Memory allocation failed, closing connection connfd=%d\n", connfd);
+                        const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+                        send(connfd, err_msg, strlen(err_msg), 0);
+
+                        for (int i = 0; i < numMessages; i++)
+                        {
+                            free(messageLines[i]);
+                        }
+
+                        keep_alive = 0;
+                        break;
+                    }
+
+                    numMessages++;
+
+                    line = strtok(NULL, "\r\n");
+                }
+
+                twoNewLine = 0;
+                continue;
+            }
+
+            // clean newline for telnet messages
+            if (len >= 2 && message[len - 2] == '\r' && message[len - 1] == '\n')
+            {
+                message[len - 2] = '\0';
+            }
+            else if (len >= 1 && message[len - 1] == '\n')
+            {
+                message[len - 1] = '\0';
+            }
+
+            messageLines[numMessages] = strdup(message);
+            numMessages += 1;
+            if (numMessages >= MAXMESSAGES)
+            {
+                printf("Too many messages, closing connection connfd=%d\n", connfd);
+                const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+                send(connfd, err_msg, strlen(err_msg), 0);
+
+                for (int i = 0; i < numMessages; i++)
+                {
+                    free(messageLines[i]);
+                }
+
+                keep_alive = 0;
+                break;
+            }
         }
 
         if (!keep_alive)
@@ -170,18 +173,25 @@ void *run_http_thread(void *vargp)
             break;
         }
 
-    printf("all lines \n");
-    for (int i = 0; i < numMessages; i++)
-    {
-        printf("%s %i \n", messageLines[i], i);
-    }
+        printf("First Line connfd=%d\n", connfd);
+        for (int i = 0; i < 1; i++)
+        {
+            printf("%s %i connfd=%d\n", messageLines[i], i, connfd);
+        }
 
         // create empty http request
+        printf("Parsing Request connfd=%d\n", connfd);
         struct httpRequest *request = calloc(1, sizeof(struct httpRequest));
-        parseHttpRequest(request, messageLines, numMessages);
+        parseHttpRequest(request, messageLines, numMessages, connfd);
 
         // if valid request at this point, look for file
-        if (request->returnCode == 200) {findFile(request, document_root);}
+        if (request->returnCode == 200)
+        {
+            printf("Finding File connfd=%d\n", connfd);
+            findFile(request, document_root);
+        } else {
+            printf("Non 200 Retrun Code: %d connfd=%d\n", request->returnCode, connfd);
+        }
 
         // HTTP/1.1 stays open by default; HTTP/1.0 closes by default
         request->keepAlive = request->requestVersion == 1;
@@ -196,12 +206,16 @@ void *run_http_thread(void *vargp)
         }
 
         // generate headers and send back
+        printf("Generating Headers connfd=%d\n", connfd);
         generate_headers(request);
+        printf("Sending Headers connfd=%d\n", connfd);
         send(connfd, request->headers, strlen(request->headers), 0);
+        printf("Sending Body connfd=%d\n", connfd);
         send(connfd, request->messageBody, request->contentLength, 0);
 
         // use this request's choice for the next loop
         keep_alive = request->keepAlive;
+        printf("Keep Alive: %d connfd=%d\n", keep_alive, connfd);
 
         // free the data for this request before reading the next one
         for (int i = 0; i < numMessages; i++)
@@ -213,13 +227,14 @@ void *run_http_thread(void *vargp)
         free(request);
     }
 
-    //close connection and thread
+    // close connection and thread
+    printf("Closing Connection Client Side connfd=%d\n", connfd);
     shutdown(connfd, 0);
     close(connfd);
     return NULL;
 }
 
-void parseHttpRequest(struct httpRequest *request, char *messageLines[], int numMessages)
+void parseHttpRequest(struct httpRequest *request, char *messageLines[], int numMessages, int connfd)
 {
     // have you given me anything
     if (numMessages < 1)
@@ -230,7 +245,6 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
 
     // is it in the form "GET <file> <version>"
     request->message = messageLines[0];
-    printf(request->message);
 
     // seperate message into array by spaces
     char *dupForTokens = strdup(request->message);
@@ -246,14 +260,17 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
         // too many arguments
         if (arrSize > 3)
         {
+            printf("Too many arguments, closing connection connfd=%d\n", connfd);
             request->returnCode = 400;
             return;
         }
     }
+    free(dupForTokens);
 
     // too few arguments
     if (arrSize != 3)
     {
+        printf("Too few arguments, closing connection connfd=%d\n", connfd);
         request->returnCode = 400;
         return;
     }
@@ -276,6 +293,7 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
     }
     else
     {
+        printf("Invalid HTTP version, closing connection connfd=%d\n", connfd);
         request->returnCode = 400;
         return;
     }
@@ -295,6 +313,7 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
 
         if (!hostFound)
         {
+            printf("Host header not found, closing connection connfd=%d\n", connfd);
             request->returnCode = 400;
             return;
         }
@@ -306,7 +325,6 @@ void parseHttpRequest(struct httpRequest *request, char *messageLines[], int num
     request->returnCode = 200;
 }
 
-
 void findFile(struct httpRequest *request, const char *document_root)
 {
     enum file_type
@@ -314,7 +332,9 @@ void findFile(struct httpRequest *request, const char *document_root)
         FILE_TYPE_UNSUPPORTED,
         FILE_TYPE_HTML,
         FILE_TYPE_JPG,
-        FILE_TYPE_GIF
+        FILE_TYPE_GIF,
+        FILE_TYPE_PNG,
+        FILE_TYPE_ICO
     };
 
     char *root_path = NULL;
@@ -327,14 +347,14 @@ void findFile(struct httpRequest *request, const char *document_root)
     FILE *file = NULL;
     struct stat file_info;
 
-    //get path of document root
+    // get path of document root
     root_path = realpath(document_root, NULL);
     if (root_path == NULL)
     {
         goto not_found;
     }
 
-    //clean leading /, turn "/" into ""
+    // clean leading /, turn "/" into ""
     if (request->fileName == NULL)
     {
         goto not_found;
@@ -345,7 +365,7 @@ void findFile(struct httpRequest *request, const char *document_root)
         uri_path++;
     }
 
-    //edge case for "/"
+    // edge case for "/"
     size_t path_length = strcspn(uri_path, "?");
     if (path_length == 0)
     {
@@ -353,7 +373,7 @@ void findFile(struct httpRequest *request, const char *document_root)
         path_length = strlen(uri_path);
     }
 
-    //copy uri_path to relative_path, make relative_path a valid string
+    // copy uri_path to relative_path, make relative_path a valid string
     relative_path = malloc(path_length + 1);
     if (relative_path == NULL)
     {
@@ -362,7 +382,7 @@ void findFile(struct httpRequest *request, const char *document_root)
     memcpy(relative_path, uri_path, path_length);
     relative_path[path_length] = '\0';
 
-    //write absolute path of file
+    // write absolute path of file
     size_t candidate_length = strlen(root_path) + path_length + 2;
     candidate_path = malloc(candidate_length);
     if (candidate_path == NULL)
@@ -371,14 +391,14 @@ void findFile(struct httpRequest *request, const char *document_root)
     }
     snprintf(candidate_path, candidate_length, "%s/%s", root_path, relative_path);
 
-    //make sure thats real
+    // make sure thats real
     file_path = realpath(candidate_path, NULL);
     if (file_path == NULL)
     {
         goto not_found;
     }
 
-    //check for escape from docRoot
+    // check for escape from docRoot
     size_t root_length = strlen(root_path);
     if (strcmp(root_path, "/") != 0 &&
         (strncmp(file_path, root_path, root_length) != 0 ||
@@ -388,7 +408,7 @@ void findFile(struct httpRequest *request, const char *document_root)
         goto cleanup;
     }
 
-    //open file
+    // open file
     file = fopen(file_path, "rb");
     if (file == NULL || fstat(fileno(file), &file_info) != 0 ||
         !S_ISREG(file_info.st_mode) || file_info.st_size < 0 || file_info.st_size > INT_MAX)
@@ -416,6 +436,14 @@ void findFile(struct httpRequest *request, const char *document_root)
     {
         type = FILE_TYPE_GIF;
     }
+    else if (extension != NULL && strcasecmp(extension, ".png") == 0)
+    {
+        type = FILE_TYPE_PNG;
+    }
+    else if (extension != NULL && strcasecmp(extension, ".ico") == 0)
+    {
+        type = FILE_TYPE_ICO;
+    }
 
     switch (type)
     {
@@ -428,12 +456,18 @@ void findFile(struct httpRequest *request, const char *document_root)
     case FILE_TYPE_GIF:
         content_type = "image/gif";
         break;
+    case FILE_TYPE_PNG:
+        content_type = "image/png";
+        break;
+    case FILE_TYPE_ICO:
+        content_type = "image/x-icon";
+        break;
     default:
         request->returnCode = 415;
         goto cleanup;
     }
-    
-    //save data of file
+
+    // save data of file
     body = malloc((size_t)file_info.st_size + 1);
     if (body == NULL || fread(body, 1, (size_t)file_info.st_size, file) != (size_t)file_info.st_size)
     {
@@ -441,14 +475,14 @@ void findFile(struct httpRequest *request, const char *document_root)
     }
     body[file_info.st_size] = '\0';
 
-    //save to request
+    // save to request
     request->messageBody = body;
     request->contentLength = (int)file_info.st_size;
     request->contentType = (char *)content_type;
     request->returnCode = 200;
     body = NULL;
 
-    //close file and free
+    // close file and free
     fclose(file);
     file = NULL;
     free(file_path);
@@ -470,8 +504,6 @@ cleanup:
     free(relative_path);
     free(root_path);
 }
-
-
 
 const char *ERROR_400_HTML =
     "<!DOCTYPE html>\n"
