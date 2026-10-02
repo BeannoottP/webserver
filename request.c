@@ -22,6 +22,33 @@ A collection of functions to handle requests
 #define BUFSIZE 1024
 #define MAXMESSAGES 16
 
+int connected_users = 0;
+
+void send_400_error(int connfd)
+{
+    const char *error_body = 
+        "<!DOCTYPE html>\n"
+        "<html>\n"
+        "<head><title>400 Bad Request</title></head>\n"
+        "<body><h1>400 Bad Request</h1></body>\n"
+        "</html>";
+
+    char full_response[1024];
+
+    int body_len = strlen(error_body);
+
+    snprintf(full_response, sizeof(full_response),
+        "HTTP/1.1 400 Bad Request\r\n"
+        "Content-Type: text/html\r\n"
+        "Content-Length: %d\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "%s",
+        body_len,
+        error_body);
+    send(connfd, full_response, strlen(full_response), 0);
+}
+
 struct httpRequest
 {
     int requestVersion; // 0 if 1.0, 1 if 1.1
@@ -47,11 +74,34 @@ void generate_headers(struct httpRequest *request);
 
 void *run_http_thread(void *vargp)
 {
-    char message[BUFSIZE];
-    int num_read; /* num bytes read */
     struct thread_args *args = vargp;
     int connfd = args->connfd;
     const char *document_root = args->document_root;
+
+    connected_users = connected_users + 1;
+
+    // timeout time based on users connected
+    int timeout_seconds;
+    if (connected_users <= 5)
+    {
+        timeout_seconds = 30;
+    }
+    else if (connected_users <= 20)
+    {
+        timeout_seconds = 15;
+    }
+    else
+    {
+        timeout_seconds = 5;
+    }
+
+    struct timeval timeout;
+    timeout.tv_sec = timeout_seconds;
+    timeout.tv_usec = 0;
+    setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    char message[BUFSIZE];
+    int num_read; /* num bytes read */
 
     /* detach this thread from parent thread */
     if (pthread_detach(pthread_self()) != 0)
@@ -101,10 +151,8 @@ void *run_http_thread(void *vargp)
                 {
                     if (numMessages >= MAXMESSAGES)
                     {
-                        //TODO Needs to send a valid http response as well
                         printf("Too many messages, closing connection connfd=%d\n", connfd);
-                        const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
-                        send(connfd, err_msg, strlen(err_msg), 0);
+                        send_400_error(connfd);
 
                         for (int i = 0; i < numMessages; i++)
                         {
@@ -119,8 +167,7 @@ void *run_http_thread(void *vargp)
                     if (messageLines[numMessages] == NULL)
                     {
                         printf("Memory allocation failed, closing connection connfd=%d\n", connfd);
-                        const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
-                        send(connfd, err_msg, strlen(err_msg), 0);
+                        send_400_error(connfd);
 
                         for (int i = 0; i < numMessages; i++)
                         {
@@ -155,8 +202,7 @@ void *run_http_thread(void *vargp)
             if (numMessages >= MAXMESSAGES)
             {
                 printf("Too many messages, closing connection connfd=%d\n", connfd);
-                const char *err_msg = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
-                send(connfd, err_msg, strlen(err_msg), 0);
+                send_400_error(connfd);
 
                 for (int i = 0; i < numMessages; i++)
                 {
@@ -230,6 +276,7 @@ void *run_http_thread(void *vargp)
 
     // close connection and thread
     printf("Closing Connection Client Side connfd=%d\n", connfd);
+    connected_users = connected_users - 1;
     shutdown(connfd, 0);
     close(connfd);
     return NULL;
@@ -418,6 +465,13 @@ void findFile(struct httpRequest *request, const char *document_root)
         !S_ISREG(file_info.st_mode) || file_info.st_size < 0 || file_info.st_size > INT_MAX)
     {
         goto not_found;
+    }
+
+    if ((file_info.st_mode & S_IROTH) == 0)
+    {
+        // file is not readable by others, return 403 
+        request->returnCode = 403;
+        goto cleanup;
     }
 
     const char *file_name = strrchr(relative_path, '/');
